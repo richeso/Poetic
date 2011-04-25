@@ -101,6 +101,9 @@
 			<when evaluator="xpath" expression="/person/name='Barack'">
 				<transformer ref="nodeEncryptTransformer"/>
 			</when>
+			<when evaluator="xpath" expression="/person/name='Richard'">
+				<transformer ref="nodeEncryptTransformer"/>
+			</when>
 			<otherwise>
 				<log-component />
 			</otherwise>

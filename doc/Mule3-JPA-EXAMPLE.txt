@@ -604,9 +604,15 @@ http://localhost:8080/rest/poetic/generate/xml/Alan
 	<name>Alan</name>
 	<surname>surname</surname>
 </person>
+
+Examples:
+---------
+
 http://localhost:8080/rest/poetic/generate/json/Barack
 {"age":"24","id":"2","job":"developer","name":"Barack","surname":"surname"}
+
 http://localhost:8080/rest/poetic/findAll/xml
+---------------------------------------------
 <?xml version="1.0" encoding="UTF-8"?>
 <people>
 	<person>
@@ -625,7 +631,9 @@ http://localhost:8080/rest/poetic/findAll/xml
 		<surname>surname</surname>
 	</person>
 </people>
+
 http://localhost:8080/rest/poetic/findById/xml/2
+
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <person>
 	<age>24</age>
@@ -634,8 +642,11 @@ http://localhost:8080/rest/poetic/findById/xml/2
 	<name>Barack</name>
 	<surname>surname</surname>
 </person>
+
 http://localhost:8080/rest/poetic/findByName/json/Alan
 {"person":{"age":"13","id":"1","job":"developer","name":"Alan","surname":"surname"}}
+
+http://localhost:8080/rest/poetic/deleteById/xml/1
 
 A few words to conclude this blog, first of all I really hope you enjoyed it, 
 but I also wanted to point out that many things here are NOT optimised, 
@@ -643,7 +654,6 @@ we are doing a lot of full text search and converting XML to Strings when maybe 
 be avoided. The main aim of this blog was to create a fun example with some interesting cool stuff, 
 which I think we achieved quite well since we managed to use an embedded database, 
 OpenJPA, REST, XML Path and Mule 3 with some interesting routing patterns. 
- 
 
 ---------------------------------------
 - Corrections Made to Original Source

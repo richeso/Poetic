@@ -49,6 +49,19 @@ public class PersonDao {
       return (Person)q.getSingleResult();
    }
  
+   public Person deleteById(int id) {
+	      Query q = em.getEntityManager().createQuery("Select p From Person p WHERE p.id=?1");
+	      q.setParameter(1, id);
+	      Person aPerson = null;
+	      Object personObject = q.getSingleResult();
+	      if (personObject != null) {
+	    	  em.getEntityManager().getTransaction().begin(); 
+	    	  aPerson =  (Person) personObject;
+		      em.getEntityManager().remove(aPerson);
+		      em.getEntityManager().getTransaction().commit();
+	      }
+	      return aPerson;
+	}
    public PoeticEntityManager getEm() {
       return em;
    }

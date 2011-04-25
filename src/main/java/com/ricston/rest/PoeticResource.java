@@ -74,6 +74,19 @@ public class PoeticResource {
       return personDao.findById(id);
    }
  
+   @GET
+   @Produces("application/xml")
+   @Path("/deleteById/xml/{id}")
+   public Person xmlDeleteById(@PathParam("id") int id) {
+      return personDao.deleteById(id);
+   }
+ 
+   @GET
+   @Produces("application/json")
+   @Path("/deleteById/json/{id}")
+   public Person jsonDeleteById(@PathParam("id") int id) {
+      return personDao.deleteById(id);
+   }
    public PersonDao getPersonDao() {
       return personDao;
    }
