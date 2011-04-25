@@ -1,0 +1,664 @@
+Mule 3 JPA Example
+Posted on March 17, 2011 by Alan Cassar   URL: http://ricston.com/blog/?p=999
+A few days ago, I was asked to create an example using Mule 3. The only requirements I had were that the example should be interesting, it should at least make use of data coming from a database, throw in some REST services, and have some interesting routing. I was given “poetic license” to create any example I wanted; how cool is that? 
+I also wanted to make this example easily deployable, that is, avoid installing databases, schemas or any other similar pre-requisites. Hence, I opted for an embedded database that can be loaded in the same JVM as the example itself. I opted to use Apache Derby. The next choice to make was which ORM system to use, if any at all. Open JPA from Apache was my choice. I must add at this point that there are no particular reasons why I chose these two products and you can argue that I could have chosen lighter, better, faster, and easier to use open source products. My answer to this would be, yes, you are probably right. But this is just meant to be a simple example which is not going to be deployed in a production environment. My main concern was making the example integrate with external systems while also making it simple to deploy in Mule, convenient to test as well as making it easily manageable from Maven. For example, Open JPA requires classes to be enhanced, however, this enhancing process can very easily be integrated with Maven using a simple plug-in.
+After this brief introduction, lets now talk about the example itself. The database will contain one simple table; ‘Person’, storing some simple information about people, like name, surname, their job, age, and ID. A Java class was created to represent the entity and annotated using Java persistence annotations. A REST interface was exposed from which you could request all persons in the database, search by a person’s name, or retrieve a person by ID. From the REST interface, the user can also generate a new person and store it in the database. A pinch of coolness was also added to this REST interface by making it able to return the data back either in XML or JSON. JAX-B was used for the conversion of our Java class to XML and JSON. Also, all persons having the name of “Barack” will be returned as encrypted, but this will only be performed if the user asks for a list of persons, or searches by name. The data will be returned unencrypted if the user queries for the person using the ID. Additionally, to make things simple for the purposes of this example, only XML replies will have the data encrypted. Of course, when encrypting the data, the XML tags themselves will not be encrypted; only the data itself.
+Now let’s start delving into a more technical description of the example. We can first start by describing the People class. This class has two very important roles. Firstly, it will be the class used when we need to load or persist data to the Person table; data from the database will be mapped into this class and vice versa. Secondly, this class will also be translated into XML or JSON form.
+The first objective was achieved by using Java persistence annotations. The Person class was annotated using @Entity, while the ID getter was given 2 annotations, @Id and @GeneratedValue(strategy = GenerationType.AUTO) which makes the ID automatically generated. JAX-B helped achieving the second objective. The Person class was also annotated with the @XmlRootElement annotation. In this example, default settings were used for both JAX-B and JPA. The class listing is shown below.
+package com.ricston.entities;
+ 
+import javax.persistence.Entity;
+import javax.persistence.GeneratedValue;
+import javax.persistence.GenerationType;
+import javax.persistence.Id;
+import javax.xml.bind.annotation.XmlRootElement;
+ 
+@XmlRootElement
+@Entity
+public class Person {
+ 
+   private int id;
+   private String name;
+   private String surname;
+   private String job;
+   private int age;
+ 
+   public Person() {
+      super();
+   }
+ 
+   public Person(int id, String name, String surname, String job, int age) {
+      super();
+      this.id = id;
+      this.name = name;
+      this.surname = surname;
+      this.job = job;
+      this.age = age;
+   }
+ 
+   @Id
+   @GeneratedValue(strategy = GenerationType.AUTO)
+   public int getId() {
+      return id;
+   }
+ 
+   public void setId(int id) {
+      this.id = id;
+   }
+ 
+   public String getName() {
+      return name;
+   }
+ 
+   public void setName(String name) {
+      this.name = name;
+   }
+ 
+   public String getSurname() {
+      return surname;
+   }
+ 
+   public void setSurname(String surname) {
+      this.surname = surname;
+   }
+ 
+   public String getJob() {
+      return job;
+   }
+ 
+   public void setJob(String job) {
+      this.job = job;
+   }
+ 
+   public int getAge() {
+      return age;
+   }
+ 
+   public void setAge(int age) {
+      this.age = age;
+   }
+ 
+}
+JPA also requires a small configuration file in META-INF/persistence.xml which contains database information such as the JDBC connection URL, username and password for database access, and the entities (the Java classes annotated with @Entity). Here is the persistence.xml file from our example. We are telling JPA that we will be using the EmbeddedDriver from Derby and the JDBC connection URL. We are also listing our Person entity explained above.
+<persistence xmlns="http://java.sun.com/xml/ns/persistence"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    version="1.0">
+    <persistence-unit name="PoeticPersistenceUnit" transaction-type="RESOURCE_LOCAL">
+    <provider>org.apache.openjpa.persistence.PersistenceProviderImpl</provider>
+        <class>com.ricston.entities.Person</class>
+        <properties>
+            <property name="openjpa.jdbc.SynchronizeMappings" value="buildSchema"/>
+            <property name="openjpa.ConnectionURL" value="jdbc:derby:poeticDB;create=true"/>
+            <property name="openjpa.ConnectionDriverName" value="org.apache.derby.jdbc.EmbeddedDriver"/>
+        </properties>
+    </persistence-unit>
+</persistence>
+The next move was to create a class to be able to initialise the JPA’s entity manager with ease from Spring. This is a very simple class with a private constructor because the aim was to have PoeticEntityManager as a singleton. A close() method was also implemented to close off the JPAs entity manager and factory before terminating the application. Note that the call to Persistence.createEntityManagerFactory() requires a parameter which is the name of the persistence unit to use. This persistence unit is the same one we defined in persistence.xml earlier in this example.
+package com.ricston.entitymanager;
+ 
+import javax.persistence.EntityManager;
+import javax.persistence.EntityManagerFactory;
+import javax.persistence.Persistence;
+ 
+public class PoeticEntityManager {
+ 
+   private static PoeticEntityManager poeticEntityManager = new PoeticEntityManager();
+ 
+   private EntityManagerFactory factory;
+   private EntityManager entityManager;
+ 
+   private PoeticEntityManager(){
+      factory =   Persistence.createEntityManagerFactory("PoeticPersistenceUnit");
+      entityManager = factory.createEntityManager();
+   }
+ 
+   public EntityManager getEntityManager(){
+      return poeticEntityManager.entityManager;
+   }
+ 
+   public void close(){
+      poeticEntityManager.entityManager.close();
+      poeticEntityManager.factory.close();
+   }
+ 
+}
+Next we need a helper class to perform our JPA queries. As explained earlier, we basically want the following functionality: 
+1. A findAll() method to return all persons currently in the database,
+2. A findByName() method which will return all persons with a given name,
+3. A generate() method which will create a new person and persist it in the database,
+4. A findById() method. 
+All of these invoked methods employ the PersistenceUnit class created above.
+The following is a code snippet for our PersonDao class:
+package com.ricston.dao;
+ 
+import com.ricston.entities.Person;
+ 
+import java.util.List;
+import java.util.Random;
+ 
+import javax.persistence.Query;
+import javax.ws.rs.PathParam;
+ 
+import com.ricston.entitymanager.PoeticEntityManager;
+ 
+public class PersonDao {
+ 
+   private PoeticEntityManager em;
+ 
+   public List<Person> findAll() {
+      Query q = em.getEntityManager().createQuery("Select p From Person p");
+      List<Person> persons = q.getResultList();
+      return persons;
+   }
+ 
+   public List<Person> findByName(String name) {
+      Query q = em.getEntityManager().createQuery("Select p From Person p Where p.name=?1");
+      q.setParameter(1, name);
+      List<Person> persons = q.getResultList();
+      return persons;
+   }
+ 
+   public Person generate(String name) {
+      em.getEntityManager().getTransaction().begin();
+ 
+      Random r = new Random();
+      Person p = new Person();
+      p.setName(name);
+      p.setAge(r.nextInt(75));
+      p.setJob("developer");
+      p.setSurname("surname");
+ 
+      em.getEntityManager().persist(p);
+      em.getEntityManager().getTransaction().commit();
+ 
+      return p;
+   }
+ 
+   public Person findById(int id) {
+      Query q = em.getEntityManager().createQuery("Select p From Person p WHERE p.id=?1");
+      q.setParameter(1, id);
+      return (Person)q.getSingleResult();
+   }
+ 
+   public PoeticEntityManager getEm() {
+      return em;
+   }
+ 
+   public void setEm(PoeticEntityManager em) {
+      this.em = em;
+   }
+ 
+}
+From JPA, lets now move onto REST and define our REST interface, which is basically our communication channel with the user. Here we are using a couple of JAX-RS annotations, together with our PersonDao class implemented above to perform our database calls and mappings. Firstly, we will be annotating this class with the @Path annotation, denoting on which path we want our REST resource to be available. Furthermore, all methods are also annotated with the @Path annotation denoting on which path that particular method will be exposed. The @PathParam annotation is used to extract data from the URL and have that data mapped onto a simple Java parameter. @GET simply denotes that we are expecting a GET HTTP request. Other options are @POST, @DELETE, @PUT.
+package com.ricston.rest;
+ 
+import java.util.List;
+ 
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+ 
+import com.ricston.dao.PersonDao;
+import com.ricston.entities.Person;
+ 
+@Path("/poetic")
+public class PoeticResource {
+ 
+   private PersonDao personDao;
+ 
+   @GET
+   @Produces("application/xml")
+   @Path("/generate/xml/{name}")
+   public Person xmlGenerate(@PathParam("name") String name) {
+      return personDao.generate(name);
+   }
+ 
+   @GET
+   @Produces("application/json")
+   @Path("/generate/json/{name}")
+   public Person jsonGenerate(@PathParam("name") String name) {
+      return personDao.generate(name);
+   }
+ 
+   @GET
+   @Produces("application/xml")
+   @Path("/findByName/xml/{name}")
+   public List<Person> xmlFindByName(@PathParam("name") String name) {
+      return personDao.findByName(name);
+   }
+ 
+   @GET
+   @Produces("application/json")
+   @Path("/findByName/json/{name}")
+   public List<Person> jsonFindByName(@PathParam("name") String name) {
+      return personDao.findByName(name);
+   }
+ 
+ 
+   @GET
+   @Produces("application/xml")
+   @Path("/findAll/xml")
+   public List<Person> xmlFindAll(@PathParam("name") String name) {
+      return personDao.findAll();
+   }
+ 
+   @GET
+   @Produces("application/json")
+   @Path("/findAll/json")
+   public List<Person> jsonFindAll(@PathParam("name") String name) {
+      return personDao.findAll();
+   }
+ 
+ 
+ 
+   @GET
+   @Produces("application/xml")
+   @Path("/findById/xml/{id}")
+   public Person xmlFindById(@PathParam("id") int id) {
+      return personDao.findById(id);
+   }
+ 
+   @GET
+   @Produces("application/json")
+   @Path("/findById/json/{name}")
+   public Person jsonFindById(@PathParam("id") int id) {
+      return personDao.findById(id);
+   }
+ 
+   public PersonDao getPersonDao() {
+      return personDao;
+   }
+ 
+   public void setPersonDao(PersonDao personDao) {
+      this.personDao = personDao;
+   }
+}
+As you can see in our REST resource class, most methods are defined twice, but internally they do exactly the same thing. The only difference between the two methods is the @Produces annotation. xml*() methods have the annotation @Produces(“application/xml”) while json*() methods are annotated using @Produces(“application/json”). This simple annotation tells our REST resource whether it should use JAX-B to return XML or JSON data, which for all intents and purposes, I find really cool. Remember that we did not need any long and boring Java code to add this feature, but only a simple annotation.
+At this point we can move on to the more interesting parts, the Mule configuration. In here we will tie up all the pieces we explained earlier, and introduce some new items, such as the encryption transformer used to encrypt the sensitive data, together with a custom transformer, implemented for this purpose.
+To clarify things, I show small snippets of our Mule configuration. At the end of this blog, you will find the full Mule configuration file. Lets kick off by defining 3 beans in Spring: the entity manager, the person DAO object which requires the entity manager to be wired in, and the REST resource which needs the person DAO to fire the queries on the database.
+<spring:beans>
+	<spring:bean id="entityManager"
+		class="com.ricston.entitymanager.PoeticEntityManager"
+		destroy-method="close" />
+ 
+	<spring:bean id="personDao" class="com.ricston.dao.PersonDao">
+		<spring:property name="em" ref="entityManager" />
+	</spring:bean>
+ 
+	<spring:bean id="restResource" class="com.ricston.rest.PoeticResource">
+		<spring:property name="personDao" ref="personDao" />
+	</spring:bean>
+</spring:beans>
+The Mule flow will go something like this:
+1. Jersey will be used in conjunction with the HTTP transport to expose the REST resource.
+2. After Jersey invokes the appropriate method, the result is tested for the string sequence; <people>.
+3. If it is found, it would mean that the user did not search the person by ID, but either triggered a search by name or requested the list of all persons. Hence we need to perform the encryption. 
+Here is the first part of the configuration:
+<inbound-endpoint address="http://localhost:8080/rest" exchange-pattern="request-response" />
+ 
+	<jersey:resources>
+		<component>
+			<spring-object bean="restResource" />
+		</component>
+	</jersey:resources>
+ 
+	<object-to-string-transformer />
+ 
+	<choice>
+		<when evaluator="groovy" expression="payload.contains('&lt;people&gt;')">
+			<outbound-endpoint ref="splitter"
+				exchange-pattern="request-response" />
+		</when>
+		<otherwise>
+			<log-component />
+		</otherwise>
+	</choice>
+The component element is wrapped in <jersey:resources> tags to be able to read and react to the JAX-RS annotations present in our component. The result is simply transformed to String using the standard Mule object-to-string-transformer, and the resultant string is tested for the sequence <people> using a groovy transformer. If the expression returns true, we should perform the encryption process encryption which we are doing by sending the message to the splitter endpoint. 
+The splitter is actually a Mule service and its job is that of splitting the XML into multiple smaller messages, one for each person element. The main reason behind this thinking is that if our machine has multicores/multiprocessors and processing is heavy, then we can take advantage of the multi-threading based architecture of Mule. If we send a separate message for each person element, the messages will be processed in a multi-threaded fashion once they are available on the inbound queue of the next service.
+An XPath expression is used to split the message which will return a DOMDocument containing one simple person node. The resultant node is forwarded to the processor flow: the flow which will do the actual encryption. The splitter service also contains an async-reply router with a collection aggregator configured. This will allow for the processor to answer on a different endpoint while the collection aggregator will correlate the processed messages belonging to the same group using the correlation ID and route one single collection of results back to the original caller.
+<service name="splitterService">
+	<inbound>
+		<inbound-endpoint ref="splitter" exchange-pattern="request-response" />
+	</inbound>
+	<outbound>
+		<expression-splitter-router evaluator="xpath"
+			expression="//person">
+			<outbound-endpoint ref="processor" exchange-pattern="one-way" />
+		</expression-splitter-router>
+	</outbound>
+	<async-reply>
+		<inbound-endpoint ref="aggregator" />
+		<collection-aggregator-router />
+	</async-reply>
+</service>
+Next up is the processor flow. Here we evaluate the DOMDocument object using XPath and look for people called Barack. If we do find Barack, we simply encrypt the data. For this, we need a custom transformer to look inside the XML elements and encrypt that data, not the whole XML node. This can easily be achieved if we do it with the help of Mule’s OOTB encryption transformer to perform the transformation, and a simple loop calling the encryption methods on each element in the DOM document as shown below.
+package com.ricston.transformers;
+ 
+import org.mule.api.EncryptionStrategy;
+import org.mule.api.security.CryptoFailureException;
+import org.mule.api.transformer.TransformerException;
+import org.mule.transformer.AbstractTransformer;
+ 
+import java.util.List;
+ 
+import org.dom4j.tree.DefaultDocument;
+import org.dom4j.tree.DefaultElement;
+ 
+public class NodeEncryptTransformer extends AbstractTransformer {
+ 
+   private EncryptionStrategy encryptionStrategy;
+ 
+   @Override
+   protected Object doTransform(Object payload, String encoding) throws TransformerException {
+ 
+      DefaultDocument document = (DefaultDocument)payload;
+      List<DefaultElement> elementList = document.getRootElement().elements();
+      try {
+         for(DefaultElement element : elementList) {
+ 
+            element.setText(new String(encryptionStrategy.encrypt(element.getText().getBytes(), "UTF-8")));
+ 
+         }
+      }
+      catch(CryptoFailureException e) {
+         throw new TransformerException(this, e);
+      }
+      return payload;
+   }
+ 
+   public EncryptionStrategy getEncryptionStrategy() {
+      return encryptionStrategy;
+   }
+ 
+   public void setEncryptionStrategy(EncryptionStrategy encryptionStrategy) {
+      this.encryptionStrategy = encryptionStrategy;
+   }
+ 
+}
+The transformer together with the flow can be configured like the following code snippet. First, we create the security manager in Mule and set up the encryption strategy to use. In our case, we used a simple password based encryption strategy with a very trivial password (not suggested for real deployments). The next thing to configure is our custom transformer, wiring in the encryption strategy just defined.
+The flow is a one way flow, reading XML DOM structures at the inbound, and applying the custom encryption transformer if the XPath expression (searching for the name Barack) matches. One the processing is done, the flow converts the XML DOM document to String and returns the result on the aggregator endpoint, where the correlation asynchronous reply router will be waiting.
+ 
+<security-manager>
+	<password-encryption-strategy name="peoticPasswordEncryption" password="poetic" />
+</security-manager>
+ 
+<custom-transformer name="nodeEncryptTransformer" class="com.ricston.transformers.NodeEncryptTransformer" >
+	<spring:property name="encryptionStrategy" ref="poeticPasswordEncryption" />
+</custom-transformer>
+ 
+<flow name="Processor">
+	<inbound-endpoint ref="processor" exchange-pattern="one-way" />
+ 
+	<choice>
+		<when evaluator="xpath" expression="/person/name='Barack'">
+			<transformer ref="nodeEncryptTransformer"/>
+		</when>
+		<otherwise>
+			<log-component />
+		</otherwise>
+	</choice>
+ 
+	<transformer ref="domToXmlTransformer"/>
+ 
+	<outbound-endpoint ref="aggregator" exchange-pattern="one-way" />
+</flow>
+The last few things we need to mention regard the final response. If our request is split and gets routed to the processor flow, then the result of the final correlation from the asynchronous reply router will be a collection, in which case we need to create the XML message back from all the singular encrypted XML responses. This should not be very difficult if we create a simple Java transformer to do the job for us.
+package com.ricston.transformers;
+ 
+import org.mule.api.transformer.TransformerException;
+import org.mule.transformer.AbstractTransformer;
+ 
+import java.util.Collection;
+ 
+public class CollectionToStringTransformer extends AbstractTransformer{
+ 
+   protected static final String XML_HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+   protected static final String PEOPLE1 = "<people>";
+   protected static final String PEOPLE2 = "</people>";
+ 
+   public String collectionToString(Collection<String> collection){
+      StringBuilder builder = new StringBuilder(XML_HEADER + "\n" + PEOPLE1);
+ 
+      for(String s : collection){
+         builder.append(s.replace(XML_HEADER, "") + "\n");
+      }
+      builder.append(PEOPLE2);
+      return builder.toString();
+   }
+ 
+   @Override
+   protected Object doTransform(Object payload, String encoding) throws TransformerException {
+      return collectionToString((Collection<String>)payload);
+   }
+}
+<custom-transformer name="collectionToStringTransformer" class="com.ricston.transformers.CollectionToStringTransformer" />
+Once we have the transformer coded and configured in Mule, then we can create our response configuration. Using Groovy, we can check the type of the payload and apply the transformer only if necessary. Also we are checking if the response contains any XML code, if yes, then we set the content-type HTTP response header to application/xml, otherwise to text/plain.
+<response>
+	<choice>
+		<when evaluator="groovy" expression="payload instanceof java.util.Collection">
+			<transformer ref="collectionToStringTransformer"/>
+		</when>
+		<otherwise>
+			<log-component />
+		</otherwise>
+	</choice>
+	<choice>
+		<when evaluator="groovy" expression="payload.contains('xml')">
+			<message-properties-transformer>
+				<add-message-property key="Content-type" value="application/xml"/>
+			</message-properties-transformer>
+		</when>
+		<otherwise>
+			<message-properties-transformer>
+				<add-message-property key="Content-type" value="text/plain"/>
+			</message-properties-transformer>
+		</otherwise>
+	</choice>
+</response>
+The final Mule configuration should look something like the following:
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:spring="http://www.springframework.org/schema/beans"
+	xmlns:jersey="http://www.mulesoft.org/schema/mule/jersey" 
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:mxml="http://www.mulesoft.org/schema/mule/xml"
+	xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+	xsi:schemaLocation="
+    http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-2.5.xsd
+    http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/3.1/mule.xsd
+    http://www.mulesoft.org/schema/mule/jersey http://www.mulesoft.org/schema/mule/jersey/3.1/mule-jersey.xsd
+    http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/3.1/mule-vm.xsd
+    http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/3.1/mule-xml.xsd
+    http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/3.1/mule-scripting.xsd
+    http://jersey.apache.org/core http://jersey.apache.org/schemas/core.xsd">
+ 
+	<security-manager>
+		<password-encryption-strategy name="poeticPasswordEncryption" password="poetic" />
+	</security-manager>
+ 
+ 
+	<custom-transformer name="collectionToStringTransformer" class="com.ricston.transformers.CollectionToStringTransformer" />
+ 
+	<custom-transformer name="nodeEncryptTransformer" class="com.ricston.transformers.NodeEncryptTransformer" >
+		<spring:property name="encryptionStrategy" ref="poeticPasswordEncryption" />
+	</custom-transformer>
+ 
+	<mxml:dom-to-xml-transformer name="domToXmlTransformer" returnClass="java.lang.String"/>
+ 
+ 
+	<spring:beans>
+		<spring:bean id="entityManager"
+			class="com.ricston.entitymanager.PoeticEntityManager"
+			destroy-method="close" />
+ 
+		<spring:bean id="personDao" class="com.ricston.dao.PersonDao">
+			<spring:property name="em" ref="entityManager" />
+		</spring:bean>
+ 
+		<spring:bean id="restResource" class="com.ricston.rest.PoeticResource">
+			<spring:property name="personDao" ref="personDao" />
+		</spring:bean>
+	</spring:beans>
+ 
+	<vm:endpoint name="splitter" path="splitter" />
+	<vm:endpoint name="processor" path="processor" />
+	<vm:endpoint name="aggregator" path="aggregator" />
+ 
+	<flow name="PersonFlow">
+		<inbound-endpoint address="http://localhost:8080/rest" exchange-pattern="request-response" />
+ 
+		<jersey:resources>
+			<component>
+				<spring-object bean="restResource" />
+			</component>
+		</jersey:resources>
+ 
+		<object-to-string-transformer />
+ 
+		<choice>
+			<when evaluator="groovy" expression="payload.contains('&lt;people&gt;')">
+				<outbound-endpoint ref="splitter"
+					exchange-pattern="request-response" />
+			</when>
+			<otherwise>
+				<log-component />
+			</otherwise>
+		</choice>
+ 
+		<response>
+			<choice>
+				<when evaluator="groovy" expression="payload instanceof java.util.Collection">
+					<transformer ref="collectionToStringTransformer"/>
+				</when>
+				<otherwise>
+					<log-component />
+				</otherwise>
+			</choice>
+			<choice>
+				<when evaluator="groovy" expression="payload.contains('xml')">
+					<message-properties-transformer>
+						<add-message-property key="Content-type" value="application/xml"/>
+					</message-properties-transformer>
+				</when>
+				<otherwise>
+					<message-properties-transformer>
+						<add-message-property key="Content-type" value="text/plain"/>
+					</message-properties-transformer>
+				</otherwise>
+			</choice>
+		</response>
+ 
+	</flow>
+ 
+ 
+	<!-- If person name is Barack, then encrypt the data using our custom transformer -->
+	<flow name="Processor">
+		<inbound-endpoint ref="processor" exchange-pattern="one-way" />
+ 
+		<choice>
+			<when evaluator="xpath" expression="/person/name='Barack'">
+				<transformer ref="nodeEncryptTransformer"/>
+			</when>
+			<otherwise>
+				<log-component />
+			</otherwise>
+		</choice>
+ 
+		<transformer ref="domToXmlTransformer"/>
+ 
+		<outbound-endpoint ref="aggregator" exchange-pattern="one-way" />
+	</flow>
+ 
+ 
+	<model>
+ 
+		<!-- receives xml file and splits on person, i.e. for each person tag, send a message -->
+		<!-- the result is correlated into a single collection using the correlation router -->
+		<service name="splitterService">
+			<inbound>
+				<inbound-endpoint ref="splitter" exchange-pattern="request-response" />
+			</inbound>
+			<outbound>
+				<expression-splitter-router evaluator="xpath"
+					expression="//person">
+					<outbound-endpoint ref="processor" exchange-pattern="one-way" />
+				</expression-splitter-router>
+			</outbound>
+			<async-reply>
+				<inbound-endpoint ref="aggregator" />
+				<collection-aggregator-router />
+			</async-reply>
+		</service>
+ 
+	</model>
+ 
+</mule>
+After deploying the whole project in Mule 3 following the Mule deployment strategy, let us start Mule and hit the REST interface. Some examples are shown below:
+http://localhost:8080/rest/poetic/generate/xml/Alan
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<person>
+	<age>13</age>
+	<id>1</id>
+	<job>developer</job>
+	<name>Alan</name>
+	<surname>surname</surname>
+</person>
+http://localhost:8080/rest/poetic/generate/json/Barack
+{"age":"24","id":"2","job":"developer","name":"Barack","surname":"surname"}
+http://localhost:8080/rest/poetic/findAll/xml
+<?xml version="1.0" encoding="UTF-8"?>
+<people>
+	<person>
+		<age>XnbQzGviaKc=</age>
+		<id>Fyn5310z5jU=</id>
+		<job>PnC4yMl3d8q0IxMCPbav6Q==</job>
+		<name>NVOy1O6/9M4=</name>
+		<surname>WxP5Fd4zUWw=</surname>
+	</person>
+ 
+	<person>
+		<age>13</age>
+		<id>1</id>
+		<job>developer</job>
+		<name>Alan</name>
+		<surname>surname</surname>
+	</person>
+</people>
+http://localhost:8080/rest/poetic/findById/xml/2
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<person>
+	<age>24</age>
+	<id>2</id>
+	<job>developer</job>
+	<name>Barack</name>
+	<surname>surname</surname>
+</person>
+http://localhost:8080/rest/poetic/findByName/json/Alan
+{"person":{"age":"13","id":"1","job":"developer","name":"Alan","surname":"surname"}}
+
+A few words to conclude this blog, first of all I really hope you enjoyed it, 
+but I also wanted to point out that many things here are NOT optimised, 
+we are doing a lot of full text search and converting XML to Strings when maybe it could 
+be avoided. The main aim of this blog was to create a fun example with some interesting cool stuff, 
+which I think we achieved quite well since we managed to use an embedded database, 
+OpenJPA, REST, XML Path and Mule 3 with some interesting routing patterns. 
+ 
+
+---------------------------------------
+- Corrections Made to Original Source
+---------------------------------------
+
+1. change Peotic to Poetic for all artifacts
+2. change name of persistence unit from PoeticUnit to PoeticPersistenceUnit in persistence.xml
+3. Add JPA provider config line in persistence.xml
+4. In rest/PoeticResource.java - remove name parmeter in json/xml findAll methods
+5. In rest/PoeticResource.java - replace {name} by {Id} in findById rest functions
+
+- To run example don't forget to add the openjpa library and set java vm arg for runtime enhancement of 
+- jpa persisted classes
+ lib\openjpa-all-2.1.0.jar
+ lib\derby-10.5.3.0_1.jar
+ 
+ in java vm args for mule server add:
+ -javaagent:c:/workeclipse/Poetic/lib/openjpa-all-2.1.0.jar

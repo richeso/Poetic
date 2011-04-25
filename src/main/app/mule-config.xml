@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:spring="http://www.springframework.org/schema/beans"
+	xmlns:jersey="http://www.mulesoft.org/schema/mule/jersey" 
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:mxml="http://www.mulesoft.org/schema/mule/xml"
+	xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+	xsi:schemaLocation="
+    http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-2.5.xsd
+    http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/3.1/mule.xsd
+    http://www.mulesoft.org/schema/mule/jersey http://www.mulesoft.org/schema/mule/jersey/3.1/mule-jersey.xsd
+    http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/3.1/mule-vm.xsd
+    http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/3.1/mule-xml.xsd
+    http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/3.1/mule-scripting.xsd
+    http://jersey.apache.org/core http://jersey.apache.org/schemas/core.xsd">
+ 
+	<security-manager>
+		<password-encryption-strategy name="poeticPasswordEncryption" password="poetic" />
+	</security-manager>
+ 
+ 
+	<custom-transformer name="collectionToStringTransformer" class="com.ricston.transformers.CollectionToStringTransformer" />
+ 
+	<custom-transformer name="nodeEncryptTransformer" class="com.ricston.transformers.NodeEncryptTransformer" >
+		<spring:property name="encryptionStrategy" ref="poeticPasswordEncryption" />
+	</custom-transformer>
+ 
+	<mxml:dom-to-xml-transformer name="domToXmlTransformer" returnClass="java.lang.String"/>
+ 
+ 
+	<spring:beans>
+		<spring:bean id="entityManager"
+			class="com.ricston.entitymanager.PoeticEntityManager"
+			destroy-method="close" />
+ 
+		<spring:bean id="personDao" class="com.ricston.dao.PersonDao">
+			<spring:property name="em" ref="entityManager" />
+		</spring:bean>
+ 
+		<spring:bean id="restResource" class="com.ricston.rest.PoeticResource">
+			<spring:property name="personDao" ref="personDao" />
+		</spring:bean>
+	</spring:beans>
+ 
+	<vm:endpoint name="splitter" path="splitter" />
+	<vm:endpoint name="processor" path="processor" />
+	<vm:endpoint name="aggregator" path="aggregator" />
+ 
+	<flow name="PersonFlow">
+		<inbound-endpoint address="http://localhost:8080/rest" exchange-pattern="request-response" />
+ 
+		<jersey:resources>
+			<component>
+				<spring-object bean="restResource" />
+			</component>
+		</jersey:resources>
+ 
+		<object-to-string-transformer />
+ 
+		<choice>
+			<when evaluator="groovy" expression="payload.contains('&lt;people&gt;')">
+				<outbound-endpoint ref="splitter"
+					exchange-pattern="request-response" />
+			</when>
+			<otherwise>
+				<log-component />
+			</otherwise>
+		</choice>
+ 
+		<response>
+			<choice>
+				<when evaluator="groovy" expression="payload instanceof java.util.Collection">
+					<transformer ref="collectionToStringTransformer"/>
+				</when>
+				<otherwise>
+					<log-component />
+				</otherwise>
+			</choice>
+			<choice>
+				<when evaluator="groovy" expression="payload.contains('xml')">
+					<message-properties-transformer>
+						<add-message-property key="Content-type" value="application/xml"/>
+					</message-properties-transformer>
+				</when>
+				<otherwise>
+					<message-properties-transformer>
+						<add-message-property key="Content-type" value="text/plain"/>
+					</message-properties-transformer>
+				</otherwise>
+			</choice>
+		</response>
+ 
+	</flow>
+ 
+ 
+	<!-- If person name is Barack, then encrypt the data using our custom transformer -->
+	<flow name="Processor">
+		<inbound-endpoint ref="processor" exchange-pattern="one-way" />
+ 
+		<choice>
+			<when evaluator="xpath" expression="/person/name='Barack'">
+				<transformer ref="nodeEncryptTransformer"/>
+			</when>
+			<otherwise>
+				<log-component />
+			</otherwise>
+		</choice>
+ 
+		<transformer ref="domToXmlTransformer"/>
+ 
+		<outbound-endpoint ref="aggregator" exchange-pattern="one-way" />
+	</flow>
+ 
+ 
+	<model>
+ 
+		<!-- receives xml file and splits on person, i.e. for each person tag, send a message -->
+		<!-- the result is correlated into a single collection using the correlation router -->
+		<service name="splitterService">
+			<inbound>
+				<inbound-endpoint ref="splitter" exchange-pattern="request-response" />
+			</inbound>
+			<outbound>
+				<expression-splitter-router evaluator="xpath"
+					expression="//person">
+					<outbound-endpoint ref="processor" exchange-pattern="one-way" />
+				</expression-splitter-router>
+			</outbound>
+			<async-reply>
+				<inbound-endpoint ref="aggregator" />
+				<collection-aggregator-router />
+			</async-reply>
+		</service>
+ 
+	</model>
+ 
+</mule>
